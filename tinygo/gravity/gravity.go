@@ -21,14 +21,16 @@ const (
 	screenH   = 240
 	textW     = 240
 	textH     = 30
+	stripH    = 20
 )
 
-var (
-	white = color.RGBA{255, 255, 255, 255}
-	black = color.RGBA{0, 0, 0, 255}
-)
+var black = color.RGBA{0, 0, 0, 255}
 
+// テキストスプライト（RGB565）
 var textBuffer [textW * textH]uint16
+
+// フレームバッファ（RGB565BE, 2bytes/pixel）
+var fbRaw [screenW * screenH * 2]byte
 
 func main() {
 	time.Sleep(2 * time.Second)
@@ -40,28 +42,17 @@ func main() {
 		SDI:       machine.LCD_SDI_PIN,
 		Frequency: 40e6,
 	})
-	println("SPI configured")
 
 	i2c := machine.I2C0
-	err := i2c.Configure(machine.I2CConfig{
+	i2c.Configure(machine.I2CConfig{
 		Frequency: 400e3,
 		SDA:       machine.SDA0_PIN,
 		SCL:       machine.SCL0_PIN,
 	})
-	if err != nil {
-		println("I2C configured error:", err.Error())
-	} else {
-		println("I2C configured successfully")
-	}
 
 	axp := axp192.New(i2c)
-	err = axp.Configure(axp192.Config{})
-	if err != nil {
-		println("AXP Configure err:", err.Error())
-	}
-	led := axp.LED
-	led.Low()
-	println("AXP configured")
+	axp.Configure(axp192.Config{})
+	axp.LED.Low()
 
 	display := ili9341.NewSPI(
 		machine.SPI2,
@@ -69,34 +60,22 @@ func main() {
 		machine.LCD_SS_PIN,
 		machine.NoPin,
 	)
-
 	display.Configure(ili9341.Config{
-		Width:            320,
-		Height:           240,
+		Width:            screenW,
+		Height:           screenH,
 		DisplayInversion: true,
 	})
-
 	display.SetRotation(ili9341.Rotation0Mirror)
 	println("Display configured")
 
-	time.Sleep(100 * time.Millisecond)
-
-	// BMI270の初期化
-	println("Initializing BMI270...")
+	// BMI270
 	imu := bmi270.New(i2c)
-	err = imu.Init()
-	if err != nil {
-		println("BMI270 init err:", err)
-	} else {
-		println("BMI270 initialized successfully")
+	if err := imu.Init(); err != nil {
+		println("BMI270 err:", err)
 	}
+	println("BMI270 ready")
 
-	// バイブレーションを止める（LDO3を無効化: 0x45）
-	println("Disabling vibration motor...")
-	err = i2c.Tx(0x34, []byte{0x12, 0x45}, nil)
-	println("LDO3 disable err:", err)
-	time.Sleep(10 * time.Millisecond)
-
+	// テキストスプライト生成
 	renderTextToBuffer()
 
 	var ax, ay float64
@@ -109,48 +88,95 @@ func main() {
 			ay = y
 		}
 
-		if count%60 == 0 {
-			println("ax:", int(ax*100), "ay:", int(ay*100), "err:", err)
+		if count%300 == 0 {
+			println("ax:", int(ax*100), "ay:", int(ay*100))
 		}
 		count++
 
-		clampX := ax
-		if clampX > 2.0 {
-			clampX = 2.0
-		} else if clampX < -2.0 {
-			clampX = -2.0
-		}
-		clampX /= 2.0
-
-		clampY := ay
-		if clampY > 2.0 {
-			clampY = 2.0
-		} else if clampY < -2.0 {
-			clampY = -2.0
-		}
-		clampY /= 2.0
-
+		// 位置計算
+		clampX := clamp(ax, -2.0, 2.0) / 2.0
+		clampY := clamp(ay, -2.0, 2.0) / 2.0
 		gx := screenW/2 + int(clampX*maxOffset)
 		gy := screenH/2 + int(clampY*maxOffset)
 
-		angleDeg := math.Atan2(ax, ay) * 180.0 / math.Pi
+		// 角度計算
+		angleRad := math.Atan2(ax, ay)
+		cosA := math.Cos(angleRad)
+		sinA := math.Sin(angleRad)
 
-		len := math.Sqrt(ax*ax + ay*ay)
-		offsetDist := 60.0
+		// テキスト位置（Gopherの重力方向反対側）
+		length := math.Sqrt(ax*ax + ay*ay)
 		ux, uy := 0.0, -1.0
-		if len > 0.01 {
-			ux = -ax / len
-			uy = -ay / len
+		if length > 0.01 {
+			ux = -ax / length
+			uy = -ay / length
 		}
-		tx := gx + int(ux*offsetDist)
-		ty := gy + int(uy*offsetDist)
+		tx := gx + int(ux*60)
+		ty := gy + int(uy*60)
 
-		display.FillScreen(white)
+		// フレームバッファを白で塗りつぶし
+		for i := range fbRaw {
+			fbRaw[i] = 0xFF
+		}
 
-		drawRotatedImage(display, gx, gy, angleDeg)
-		drawRotatedText(display, tx, ty, angleDeg)
+		// Gopher描画
+		drawRotatedGopher(gx, gy, cosA, sinA)
 
-		time.Sleep(16 * time.Millisecond)
+		// テキスト描画
+		drawRotatedText(tx, ty, cosA, sinA)
+
+		// ストリップ分割転送
+		rowBytes := screenW * 2
+		for sy := 0; sy < screenH; sy += stripH {
+			start := sy * rowBytes
+			display.DrawRGBBitmap8(0, int16(sy), fbRaw[start:start+stripH*rowBytes], screenW, stripH)
+		}
+	}
+}
+
+func setFBPixel(x, y int, rgb565 uint16) {
+	if x >= 0 && x < screenW && y >= 0 && y < screenH {
+		offset := (y*screenW + x) * 2
+		fbRaw[offset] = byte(rgb565 >> 8)
+		fbRaw[offset+1] = byte(rgb565)
+	}
+}
+
+func drawRotatedGopher(cx, cy int, cosA, sinA float64) {
+	halfW := imgW / 2
+	halfH := imgH / 2
+
+	for dy := -halfH; dy < halfH; dy++ {
+		for dx := -halfW; dx < halfW; dx++ {
+			srcX := int(float64(dx)*cosA+float64(dy)*sinA) + halfW
+			srcY := int(-float64(dx)*sinA+float64(dy)*cosA) + halfH
+
+			if srcX >= 0 && srcX < imgW && srcY >= 0 && srcY < imgH {
+				rgb565 := gopherData[srcY*imgW+srcX]
+				if rgb565 != 0xFFFF {
+					setFBPixel(cx+dx, cy+dy, rgb565)
+				}
+			}
+		}
+	}
+}
+
+func drawRotatedText(cx, cy int, cosA, sinA float64) {
+	halfW := textW / 2
+	halfH := textH / 2
+
+	for dy := -halfH; dy < halfH; dy++ {
+		for dx := -halfW; dx < halfW; dx++ {
+			srcX := int(float64(dx)*cosA+float64(dy)*sinA) + halfW
+			srcY := int(-float64(dx)*sinA+float64(dy)*cosA) + halfH
+
+			if srcX >= 0 && srcX < textW && srcY >= 0 && srcY < textH {
+				rgb565 := textBuffer[srcY*textW+srcX]
+				if rgb565 != 0xFFFF {
+					setFBPixel(cx+dx, cy+dy, rgb565)
+				}
+			}
+		}
 	}
 }
 
@@ -158,13 +184,11 @@ func renderTextToBuffer() {
 	for i := range textBuffer {
 		textBuffer[i] = 0xFFFF
 	}
-
 	bufDisplay := &bufferDisplay{
 		buffer: textBuffer[:],
 		width:  textW,
 		height: textH,
 	}
-
 	tinyfont.WriteLine(bufDisplay, &freemono.Regular9pt7b, 0, 20, "Hello, TinyGo World", black)
 }
 
@@ -183,68 +207,18 @@ func (d *bufferDisplay) SetPixel(x, y int16, c color.RGBA) {
 	}
 }
 
-func (d *bufferDisplay) Display() error {
-	return nil
-}
+func (d *bufferDisplay) Display() error { return nil }
 
 func (d *bufferDisplay) Size() (int16, int16) {
 	return int16(d.width), int16(d.height)
 }
 
-func drawRotatedImage(display *ili9341.Device, cx, cy int, angleDeg float64) {
-	angleRad := angleDeg * math.Pi / 180.0
-	cosA := math.Cos(angleRad)
-	sinA := math.Sin(angleRad)
-
-	halfW := imgW / 2
-	halfH := imgH / 2
-
-	for dy := -halfH; dy < halfH; dy++ {
-		for dx := -halfW; dx < halfW; dx++ {
-			srcX := int(float64(dx)*cosA+float64(dy)*sinA) + halfW
-			srcY := int(-float64(dx)*sinA+float64(dy)*cosA) + halfH
-
-			if srcX >= 0 && srcX < imgW && srcY >= 0 && srcY < imgH {
-				idx := srcY*imgW + srcX
-				rgb565 := gopherData[idx]
-
-				r := uint8(((rgb565 >> 11) & 0x1F) << 3)
-				g := uint8(((rgb565 >> 5) & 0x3F) << 2)
-				b := uint8((rgb565 & 0x1F) << 3)
-
-				c := color.RGBA{r, g, b, 255}
-				display.SetPixel(int16(cx+dx), int16(cy+dy), c)
-			}
-		}
+func clamp(v, min, max float64) float64 {
+	if v < min {
+		return min
 	}
-}
-
-func drawRotatedText(display *ili9341.Device, cx, cy int, angleDeg float64) {
-	angleRad := angleDeg * math.Pi / 180.0
-	cosA := math.Cos(angleRad)
-	sinA := math.Sin(angleRad)
-
-	halfW := textW / 2
-	halfH := textH / 2
-
-	for dy := -halfH; dy < halfH; dy++ {
-		for dx := -halfW; dx < halfW; dx++ {
-			srcX := int(float64(dx)*cosA+float64(dy)*sinA) + halfW
-			srcY := int(-float64(dx)*sinA+float64(dy)*cosA) + halfH
-
-			if srcX >= 0 && srcX < textW && srcY >= 0 && srcY < textH {
-				idx := srcY*textW + srcX
-				rgb565 := textBuffer[idx]
-
-				if rgb565 != 0xFFFF {
-					r := uint8(((rgb565 >> 11) & 0x1F) << 3)
-					g := uint8(((rgb565 >> 5) & 0x3F) << 2)
-					b := uint8((rgb565 & 0x1F) << 3)
-
-					c := color.RGBA{r, g, b, 255}
-					display.SetPixel(int16(cx+dx), int16(cy+dy), c)
-				}
-			}
-		}
+	if v > max {
+		return max
 	}
+	return v
 }
