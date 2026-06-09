@@ -88,8 +88,8 @@ func main() {
 			ay = y
 		}
 
-		if count%300 == 0 {
-			println("ax:", int(ax*100), "ay:", int(ay*100))
+		if count%60 == 0 {
+			println("ax:", int(ax*100), "ay:", int(ay*100), "err:", err)
 		}
 		count++
 
@@ -131,6 +131,8 @@ func main() {
 			start := sy * rowBytes
 			display.DrawRGBBitmap8(0, int16(sy), fbRaw[start:start+stripH*rowBytes], screenW, stripH)
 		}
+
+		time.Sleep(16 * time.Millisecond)
 	}
 }
 
@@ -146,8 +148,12 @@ func drawRotatedGopher(cx, cy int, cosA, sinA float64) {
 	halfW := imgW / 2
 	halfH := imgH / 2
 
-	for dy := -halfH; dy < halfH; dy++ {
-		for dx := -halfW; dx < halfW; dx++ {
+	// 回転後のバウンディングボックス
+	bboxHW := int(math.Abs(float64(halfW)*cosA)+math.Abs(float64(halfH)*sinA)) + 1
+	bboxHH := int(math.Abs(float64(halfW)*sinA)+math.Abs(float64(halfH)*cosA)) + 1
+
+	for dy := -bboxHH; dy < bboxHH; dy++ {
+		for dx := -bboxHW; dx < bboxHW; dx++ {
 			srcX := int(float64(dx)*cosA+float64(dy)*sinA) + halfW
 			srcY := int(-float64(dx)*sinA+float64(dy)*cosA) + halfH
 
@@ -165,8 +171,12 @@ func drawRotatedText(cx, cy int, cosA, sinA float64) {
 	halfW := textW / 2
 	halfH := textH / 2
 
-	for dy := -halfH; dy < halfH; dy++ {
-		for dx := -halfW; dx < halfW; dx++ {
+	// 回転後のバウンディングボックス
+	bboxHW := int(math.Abs(float64(halfW)*cosA)+math.Abs(float64(halfH)*sinA)) + 1
+	bboxHH := int(math.Abs(float64(halfW)*sinA)+math.Abs(float64(halfH)*cosA)) + 1
+
+	for dy := -bboxHH; dy < bboxHH; dy++ {
+		for dx := -bboxHW; dx < bboxHW; dx++ {
 			srcX := int(float64(dx)*cosA+float64(dy)*sinA) + halfW
 			srcY := int(-float64(dx)*sinA+float64(dy)*cosA) + halfH
 

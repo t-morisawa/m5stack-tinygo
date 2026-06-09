@@ -110,9 +110,15 @@ func (d *Device) Init() error {
 	}
 	time.Sleep(200 * time.Millisecond)
 
-	// INTERNAL_STATUSを確認 (正しいアドレス: 0x21)
-	intStatus, _ := d.readReg(INTERNAL_STATUS_REG)
-	println("INTERNAL_STATUS:", intStatus)
+	// INTERNAL_STATUSを確認（リトライ付き）
+	for i := 0; i < 10; i++ {
+		intStatus, _ := d.readReg(INTERNAL_STATUS_REG)
+		println("INTERNAL_STATUS:", intStatus)
+		if intStatus == 0x01 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	// ACC_CONF: ODR=100Hz, BWP=normal, filter_perf=1
 	if err := d.writeReg(ACC_CONF_REG, 0xA8); err != nil {
