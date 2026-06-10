@@ -15,9 +15,12 @@ const (
 
 	CHIP_ID_REG         = 0x00
 	ACC_DATA_REG        = 0x0C
+	GYR_DATA_REG        = 0x12
 	INTERNAL_STATUS_REG = 0x21
 	ACC_CONF_REG        = 0x40
 	ACC_RANGE_REG       = 0x41
+	GYR_CONF_REG        = 0x42
+	GYR_RANGE_REG       = 0x43
 	INIT_CTRL_REG       = 0x59
 	INIT_ADDR_0_REG     = 0x5B
 	INIT_ADDR_1_REG     = 0x5C
@@ -38,21 +41,34 @@ const (
 	ACCEL_16G AccelRange = 0x03
 )
 
+type GyroRange uint8
+
+const (
+	GYRO_2000DPS GyroRange = 0x00
+	GYRO_1000DPS GyroRange = 0x01
+	GYRO_500DPS  GyroRange = 0x02
+	GYRO_250DPS  GyroRange = 0x03
+	GYRO_125DPS  GyroRange = 0x04
+)
+
 type Device struct {
 	bus        drivers.I2C
 	Address    uint16
 	accelRange AccelRange
+	gyroRange  GyroRange
 	wbuf       [17]byte
 	rbuf       [6]byte
 }
 
 type Config struct {
 	AccelRange AccelRange
+	GyroRange  GyroRange
 }
 
 func DefaultConfig() Config {
 	return Config{
 		AccelRange: ACCEL_2G,
+		GyroRange:  GYRO_2000DPS,
 	}
 }
 
@@ -85,6 +101,12 @@ func (d *Device) Configure(cfg Config) error {
 		d.accelRange = cfg.AccelRange
 	} else {
 		d.accelRange = ACCEL_2G
+	}
+
+	if cfg.GyroRange != 0 {
+		d.gyroRange = cfg.GyroRange
+	} else {
+		d.gyroRange = GYRO_2000DPS
 	}
 
 	if err := d.writeRegister(CMD_REG, 0xB6); err != nil {
@@ -168,7 +190,31 @@ func (d *Device) Configure(cfg Config) error {
 		return err
 	}
 
-	if err := d.writeRegister(PWR_CTRL_REG, 0x04); err != nil {
+	if err := d.writeRegister(GYR_CONF_REG, 0xA8); err != nil {
+		return err
+	}
+
+	var gyroRangeVal byte
+	switch d.gyroRange {
+	case GYRO_2000DPS:
+		gyroRangeVal = 0x00
+	case GYRO_1000DPS:
+		gyroRangeVal = 0x01
+	case GYRO_500DPS:
+		gyroRangeVal = 0x02
+	case GYRO_250DPS:
+		gyroRangeVal = 0x03
+	case GYRO_125DPS:
+		gyroRangeVal = 0x04
+	default:
+		gyroRangeVal = 0x00
+	}
+	if err := d.writeRegister(GYR_RANGE_REG, gyroRangeVal); err != nil {
+		return err
+	}
+
+	pwrCtrlVal := byte(0x06)
+	if err := d.writeRegister(PWR_CTRL_REG, pwrCtrlVal); err != nil {
 		return err
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -196,6 +242,34 @@ func (d *Device) ReadAcceleration() (x, y, z int32, err error) {
 		k = 244
 	case ACCEL_16G:
 		k = 488
+	}
+
+	x = rawX * k
+	y = rawY * k
+	z = rawZ * k
+	return
+}
+
+// ReadRotation returns the angular velocity in µdps (micro-degrees/second).
+func (d *Device) ReadRotation() (x, y, z int32, err error) {
+	if err = d.readRegister(GYR_DATA_REG, d.rbuf[:6]); err != nil {
+		return 0, 0, 0, err
+	}
+
+	rawX := int32(int16((uint16(d.rbuf[1]) << 8) | uint16(d.rbuf[0])))
+	rawY := int32(int16((uint16(d.rbuf[3]) << 8) | uint16(d.rbuf[2])))
+	rawZ := int32(int16((uint16(d.rbuf[5]) << 8) | uint16(d.rbuf[4])))
+
+	k := int32(60976)
+	switch d.gyroRange {
+	case GYRO_1000DPS:
+		k = 30488
+	case GYRO_500DPS:
+		k = 15244
+	case GYRO_250DPS:
+		k = 7622
+	case GYRO_125DPS:
+		k = 3811
 	}
 
 	x = rawX * k
