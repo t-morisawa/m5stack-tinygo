@@ -70,7 +70,7 @@ func main() {
 
 	// BMI270
 	imu := bmi270.New(i2c)
-	if err := imu.Init(); err != nil {
+	if err := imu.Configure(bmi270.DefaultConfig()); err != nil {
 		println("BMI270 err:", err)
 	}
 	println("BMI270 ready")
@@ -82,10 +82,10 @@ func main() {
 	count := 0
 
 	for {
-		x, y, _, err := imu.ReadAcceleration()
+		ix, iy, _, err := imu.ReadAcceleration()
 		if err == nil {
-			ax = x
-			ay = y
+			ax = float64(ix) / 1_000_000
+			ay = float64(iy) / 1_000_000
 		}
 
 		if count%60 == 0 {
