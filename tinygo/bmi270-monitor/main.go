@@ -15,7 +15,7 @@ func main() {
 		SCL:       machine.SCL0_PIN,
 	})
 
-	imu := bmi270.New(i2c)
+	imu := bmi270.NewI2C(i2c, bmi270.Address)
 	if err := imu.Configure(bmi270.DefaultConfig()); err != nil {
 		println("BMI270 error:", err.Error())
 		return

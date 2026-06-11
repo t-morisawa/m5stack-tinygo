@@ -69,7 +69,7 @@ func main() {
 	println("Display configured")
 
 	// BMI270
-	imu := bmi270.New(i2c)
+	imu := bmi270.NewI2C(i2c, bmi270.Address)
 	if err := imu.Configure(bmi270.DefaultConfig()); err != nil {
 		println("BMI270 err:", err)
 	}
