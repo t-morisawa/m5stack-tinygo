@@ -21,7 +21,6 @@ const (
 	screenH   = 240
 	textW     = 240
 	textH     = 30
-	stripH    = 20
 )
 
 var black = color.RGBA{0, 0, 0, 255}
@@ -134,12 +133,9 @@ func main() {
 		// テキスト描画
 		drawRotatedText(tx, ty, cosA, sinA)
 
-		// ストリップ分割転送
-		rowBytes := screenW * 2
-		for sy := 0; sy < screenH; sy += stripH {
-			start := sy * rowBytes
-			display.DrawRGBBitmap8(0, int16(sy), fbRaw[start:start+stripH*rowBytes], screenW, stripH)
-		}
+		// フレームバッファ全体を一括転送
+		// （ストリップ分割を廃止して、setWindow/CS切り替えのオーバーヘッドを1回に抑える）
+		display.DrawRGBBitmap8(0, 0, fbRaw[:], screenW, screenH)
 
 		time.Sleep(16 * time.Millisecond)
 	}
