@@ -80,6 +80,7 @@ func main() {
 
 	var ax, ay float64
 	count := 0
+	var lastTime time.Time
 
 	for {
 		ix, iy, _, err := imu.ReadAcceleration()
@@ -89,7 +90,15 @@ func main() {
 		}
 
 		if count%60 == 0 {
-			println("ax:", int(ax*100), "ay:", int(ay*100), "err:", err)
+			now := time.Now()
+			if count > 0 {
+				elapsedMs := now.Sub(lastTime).Milliseconds()
+				if elapsedMs > 0 {
+					fps := int(60000 / elapsedMs)
+					println("FPS:", fps, "ax:", int(ax*100), "ay:", int(ay*100), "err:", err)
+				}
+			}
+			lastTime = now
 		}
 		count++
 
@@ -152,17 +161,35 @@ func drawRotatedGopher(cx, cy int, cosA, sinA float64) {
 	bboxHW := int(math.Abs(float64(halfW)*cosA)+math.Abs(float64(halfH)*sinA)) + 1
 	bboxHH := int(math.Abs(float64(halfW)*sinA)+math.Abs(float64(halfH)*cosA)) + 1
 
-	for dy := -bboxHH; dy < bboxHH; dy++ {
-		for dx := -bboxHW; dx < bboxHW; dx++ {
-			srcX := int(float64(dx)*cosA+float64(dy)*sinA) + halfW
-			srcY := int(-float64(dx)*sinA+float64(dy)*cosA) + halfH
+	const fpShift = 8
+	const fpScale = 1 << fpShift
 
-			if srcX >= 0 && srcX < imgW && srcY >= 0 && srcY < imgH {
-				rgb565 := gopherData[srcY*imgW+srcX]
+	cosFP := int32(cosA * fpScale)
+	sinFP := int32(sinA * fpScale)
+	hwFP := int32(halfW << fpShift)
+	hhFP := int32(halfH << fpShift)
+
+	// DDA: X方向に1進むごとの増分
+	stepX := cosFP
+	stepY := -sinFP
+
+	for dy := -bboxHH; dy < bboxHH; dy++ {
+		// この行の左端 (dx = -bboxHW) の座標を固定小数点で計算
+		curX := int32(-bboxHW)*cosFP + int32(dy)*sinFP + hwFP
+		curY := int32(-bboxHW)*(-sinFP) + int32(dy)*cosFP + hhFP
+
+		for dx := -bboxHW; dx < bboxHW; dx++ {
+			x := int(curX >> fpShift)
+			y := int(curY >> fpShift)
+
+			if x >= 0 && x < imgW && y >= 0 && y < imgH {
+				rgb565 := gopherData[y*imgW+x]
 				if rgb565 != 0xFFFF {
 					setFBPixel(cx+dx, cy+dy, rgb565)
 				}
 			}
+			curX += stepX
+			curY += stepY
 		}
 	}
 }
@@ -175,17 +202,35 @@ func drawRotatedText(cx, cy int, cosA, sinA float64) {
 	bboxHW := int(math.Abs(float64(halfW)*cosA)+math.Abs(float64(halfH)*sinA)) + 1
 	bboxHH := int(math.Abs(float64(halfW)*sinA)+math.Abs(float64(halfH)*cosA)) + 1
 
-	for dy := -bboxHH; dy < bboxHH; dy++ {
-		for dx := -bboxHW; dx < bboxHW; dx++ {
-			srcX := int(float64(dx)*cosA+float64(dy)*sinA) + halfW
-			srcY := int(-float64(dx)*sinA+float64(dy)*cosA) + halfH
+	const fpShift = 8
+	const fpScale = 1 << fpShift
 
-			if srcX >= 0 && srcX < textW && srcY >= 0 && srcY < textH {
-				rgb565 := textBuffer[srcY*textW+srcX]
+	cosFP := int32(cosA * fpScale)
+	sinFP := int32(sinA * fpScale)
+	hwFP := int32(halfW << fpShift)
+	hhFP := int32(halfH << fpShift)
+
+	// DDA: X方向に1進むごとの増分
+	stepX := cosFP
+	stepY := -sinFP
+
+	for dy := -bboxHH; dy < bboxHH; dy++ {
+		// この行の左端 (dx = -bboxHW) の座標を固定小数点で計算
+		curX := int32(-bboxHW)*cosFP + int32(dy)*sinFP + hwFP
+		curY := int32(-bboxHW)*(-sinFP) + int32(dy)*cosFP + hhFP
+
+		for dx := -bboxHW; dx < bboxHW; dx++ {
+			x := int(curX >> fpShift)
+			y := int(curY >> fpShift)
+
+			if x >= 0 && x < textW && y >= 0 && y < textH {
+				rgb565 := textBuffer[y*textW+x]
 				if rgb565 != 0xFFFF {
 					setFBPixel(cx+dx, cy+dy, rgb565)
 				}
 			}
+			curX += stepX
+			curY += stepY
 		}
 	}
 }
